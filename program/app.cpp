@@ -39,15 +39,16 @@ static int32_t   bt_cmd = 0;      // Bluetoothコマンド１ : リモートス�
 static FILE     *bt = NULL;       // Bluetoothファイルハンドル
 
 // 下記のマクロは個体/環境に合わせて変更する必要があります
-#define GYRO_OFFSET           0   // ジャイロセンサオフセット値(角速度0[deg/sec]時)
+#define GYRO_OFFSET            0   // ジャイロセンサオフセット値(角速度0[deg/sec]時)
 #define SONAR_ALERT_DISTANCE  13   // 超音波センサによる障害物検知距離[cm]
 #define TAIL_ANGLE_STAND_UP  100   // 完全停止時の角度[度]
-#define TAIL_ANGLE_DRIVE      0   // バランス走行時の角度[度]
-#define P_GAIN             2.5F   // 完全停止用モータ制御比例定数
-#define PWM_ABS_MAX          60   // 完全停止用モータ制御PWM絶対最大値
-//#define DEVICE_NAME     "ET0"  // Bluetooth名 hrp2/target/ev3.h BLUETOOTH_LOCAL_NAME?��Őݒ�
-//#define PASS_KEY        "1234" // パスキー    hrp2/target/ev3.h BLUETOOTH_PIN_CODE?��Őݒ�
-#define CMD_START         '1'     // リモートスタートコマンド
+#define TAIL_ANGLE_DRIVE       0   // バランス走行時の角度[度]
+#define P_GAIN              2.5F   // 完全停止用モータ制御比例定数
+#define PWM_ABS_MAX           60   // 完全停止用モータ制御PWM絶対最大値
+#define TASK_INTERVAL          4
+//#define DEVICE_NAME      "ET0"   // Bluetooth名 hrp2/target/ev3.h BLUETOOTH_LOCAL_NAME?��Őݒ�
+//#define PASS_KEY        "1234"   // パスキー    hrp2/target/ev3.h BLUETOOTH_PIN_CODE?��Őݒ�
+#define CMD_START            '1'   // リモートスタートコマンド
 
 // 輝度PID制御のパラメタ(旋回制御)
 #define DELTA_T 0.004  // 走行制御の動作周期
@@ -56,14 +57,12 @@ static FILE     *bt = NULL;       // Bluetoothファイルハンドル
 /*
 #define KP 0.36          // Pパラメタ
 #define KI 1.2           // Iパラメタ
-#define KD 0.027           // Dパラメタ
+#define KD 0.027         // Dパラメタ
 */
-
 // LCDフォントサイズ
 #define CALIB_FONT (EV3_FONT_SMALL)
 #define CALIB_FONT_WIDTH (6)
 #define CALIB_FONT_HEIGHT (8)
-
 // 区間の境界の位置
 #define S1 1
 #define C1 1811
@@ -72,19 +71,45 @@ static FILE     *bt = NULL;       // Bluetoothファイルハンドル
 #define S3 912
 
 // 関数プロトタイプ宣言
-static int32_t sonar_alert(void); // ソナーセンサで障害物を検知する
-static void tail_control(int32_t angle); // 尻尾モータの角度を固定する
-static void lookup_strategy(void); // ルックアップゲートを攻略する
-static void style_change(int32_t angle, int32_t time_ms); // 指定した時間をかけて、尻尾モータを動かす
-static void garage_stop(void); // 駐車時の動作(現状ルックアップゲートのあと用)
-static void figure_strategy(void); // フィギュアLを膠着する
-static void figure_strategy2(void); // フィギュアLを攻略する(現在こちらを採用)
-static void limited_line_trace(int8_t forward, int16_t time); // 指定した時間ラインtのレースする
-static void straight_limited_line_trace(int8_t forward, int16_t time); // 指定した時間turn値0でライントレースする
-static void tail_limited_line_trace(int8_t forward, int16_t c_angle, int16_t angle, int16_t num); // 指定した時間turn値0でライントレースする。このとき尻尾のモータをd
-static void moving_style_change(int32_t current_angle, int32_t angle, int32_t time, int32_t motor); // タイヤを動かしながら尻尾モータを動かす
-static void calib_strategy(void); // キャリブレーションを行う
-static void stop_style_change(int16_t angle, int16_t time); // 走行状態から倒立状態へ移行
+// ソナーセンサで障害物を検知する
+static int32_t
+sonar_alert(void);
+// 尻尾モータの角度を固定する
+static void
+tail_control(int32_t angle);
+// ルックアップゲートを攻略する
+static void
+lookup_strategy(void);
+// 指定した時間をかけて、尻尾モータを動かす
+static void
+style_change(int32_t angle, int32_t time_ms);
+// 駐車時の動作(現状ルックアップゲートのあと用)
+static void
+garage_stop(void);
+// フィギュアLを膠着する
+static void
+figure_strategy(void);
+// フィギュアLを攻略する(現在こちらを採用)
+static void
+figure_strategy2(void);
+// 指定した時間ラインtのレースする
+static void
+limited_line_trace(int8_t forward, int16_t time);
+// 指定した時間turn値0でライントレースする
+static void
+straight_limited_line_trace(int8_t forward, int16_t time);
+// 指定した時間turn値0でライントレースする。このとき尻尾のモータをd
+static void
+tail_limited_line_trace(int8_t forward, int16_t c_angle, int16_t angle, int16_t num);
+// タイヤを動かしながら尻尾モータを動かす
+static void
+moving_style_change(int32_t current_angle, int32_t angle, int32_t time, int32_t motor);
+// キャリブレーションを行う
+static void
+calib_strategy(void);
+// 走行状態から倒立状態へ移行
+static void
+stop_style_change(int16_t angle, int16_t time);
 
 // 大域宣言
 
@@ -150,7 +175,7 @@ void main_task(intptr_t unused)
     calib_strategy();
 
     // 尻尾モータの遊びをなくすため、巻き込む
-    while  (1) {
+    while ( 1 ) {
         ev3_motor_set_power(EV3_PORT_A, -10);
         clock->sleep(4);
         ev3_speaker_play_tone(700, 60);
@@ -174,26 +199,24 @@ void main_task(intptr_t unused)
     int tail_butt = 0;
 
     // スタート待機
-    while(1)
-    {
+    while ( 1 ) {
         tail_control(TAIL_ANGLE_STAND_UP + tail_butt); // 完全停止用角度に制御
 
         // しっぽ手動調整
-        if (ev3_button_is_pressed(UP_BUTTON)) { tail_butt++; ev3_speaker_play_tone(300, 20); clock->sleep(300); }
-        if (ev3_button_is_pressed(DOWN_BUTTON)) { tail_butt--; ev3_speaker_play_tone(600, 20); clock->sleep(300); }
-
-        if (bt_cmd == 1)
-        {
-            // リモートスタート
-            break;
+        if ( ev3_button_is_pressed(UP_BUTTON) ) {
+          tail_butt++;
+          ev3_speaker_play_tone(300, 20);
+          clock->sleep(300);
         }
 
-        if (touchSensor->isPressed())
-        {
-            // タッチセンサが押された
-            break;
+        if ( ev3_button_is_pressed(DOWN_BUTTON) ) {
+          tail_butt--;
+          ev3_speaker_play_tone(600, 20);
+          clock->sleep(300);
         }
 
+        if (bt_cmd == 1) { break; }
+        if (touchSensor->isPressed()) { break; }
         clock->sleep(10);
     }
 
@@ -211,20 +234,11 @@ void main_task(intptr_t unused)
     ev3_led_set_color(LED_GREEN);
 
     // バランス走行のループ
-    while(1)
-    {
+    while ( 1 ) {
         int32_t motor_ang_l, motor_ang_r;
         int32_t gyro, volt;
-
-        // バックボタンを押したら停止
         if (ev3_button_is_pressed(BACK_BUTTON)) break;
-
-        // バランス走行用角度に制御
         tail_control(TAIL_ANGLE_DRIVE);
-
-
-
-
         // 区間切り分け
         // S1
         if ( motor_ang_r < S1 ) {
@@ -243,7 +257,7 @@ void main_task(intptr_t unused)
         }
 
         // シーソーへの侵入検知
-        if (  ev3_gyro_sensor_get_rate(EV3_PORT_4) > 30 || ev3_gyro_sensor_get_rate(EV3_PORT_4) < -30 ) {
+        if ( ev3_gyro_sensor_get_rate(EV3_PORT_4) > 30 || ev3_gyro_sensor_get_rate(EV3_PORT_4) < -30 ) {
             ev3_speaker_play_tone(300, 20);
             ev3_speaker_play_tone(300, 20);
             ev3_speaker_play_tone(300, 20);
@@ -255,15 +269,12 @@ void main_task(intptr_t unused)
         diff[0] = diff[1];
         diff[1] = (colorSensor->getBrightness()) - ((light_white + light_black)/2);
         integral += ( diff[1] + diff[0] ) / 2.0 * DELTA_T;
-        // 比例
         p = kp * diff[1];
-        // 微分
         i = ki * integral;
-        // 積分
         d = kd * (diff[1] - diff[0]) / DELTA_T;
         turn = p + i + d;
-        if ( p + i + d > 100.0 ) turn = 100.0;
-        if ( p + i + d < -100.0 ) turn = -100.0;
+        if ( p + i + d > 100.0 ) { turn = 100.0;}
+        else if ( p + i + d < -100.0 ) { turn = -100.0; }
 
         // 倒立振子制御APIに渡すパラメータを取得する
         motor_ang_l = leftMotor->getCount();
@@ -288,7 +299,7 @@ void main_task(intptr_t unused)
         rightMotor->setPWM(pwm_R);
 
         // ライントレース時はセンサの仕様のため4msec周期起動
-        clock->sleep(4);
+        clock->sleep(TASK_INTERVAL);
     }
 
     leftMotor->reset();
@@ -314,27 +325,16 @@ static int32_t sonar_alert(void)
     int32_t distance;
 
     // 約40msec周期毎に障害物検知
-    if (++counter == 40/4)
-    {
+    if ( ++counter == 40 / TASK_INTERVAL ) {
          /*
          * 超音波センサによる距離測定周期は、超音波の減衰特性に依存します.
          * NXTの場合は、40msec周期程度が経験上の最短測定周期です.
          * EV3の場合は、要確認.
          */
         distance = sonarSensor->getDistance();
-        if ((distance <= SONAR_ALERT_DISTANCE) && (distance >= 0))
-        {
-            // 障害物を検知
-            alert = 1;
-        }
-        else
-        {
-            // 障害物無し
-            alert = 0;
-        }
+        alert = (distance <= SONAR_ALERT_DISTANCE) && (distance >= 0) ? 1 : 0;
         counter = 0;
     }
-
     return alert;
 }
 
@@ -349,12 +349,9 @@ static void tail_control(int32_t angle)
     // 比例制御
     float pwm = (float)(angle - tailMotor->getCount()) * P_GAIN;
     // PWM出力総和処理
-    if (pwm > PWM_ABS_MAX)
-    {
+    if (pwm > PWM_ABS_MAX) {
         pwm = PWM_ABS_MAX;
-    }
-    else if (pwm < -PWM_ABS_MAX)
-    {
+    } else if (pwm < -PWM_ABS_MAX) {
         pwm = -PWM_ABS_MAX;
     }
 
@@ -370,13 +367,11 @@ static void tail_control(int32_t angle)
 //*****************************************************************************
 void bt_task(intptr_t unused)
 {
-    while(1)
-    {
+    while ( 1 ) {
         // 受信
 
         uint8_t c = fgetc(bt);
-        switch(c)
-        {
+        switch ( c ) {
         case '1':
             bt_cmd = 1;
             break;
@@ -485,7 +480,8 @@ void lookup_strategy(void)
 
     // 4msec周期500回で、前進する(ゲート通過)
     i = 0;
-    while (1) {
+    // ネストが深い．反復変数の乱用
+    while ( 1 ) {
         if (i++ >= 800) { break; }
 
             ev3_motor_set_power(EV3_PORT_B, lpower);
